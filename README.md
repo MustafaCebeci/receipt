@@ -1,115 +1,97 @@
 # Receipt PDF Generator
 
-A fluent Go package for generating 80mm thermal POS printer receipts. Wraps `gofpdf` completely, providing a clean Compose-style API.
+80mm termal yazıcılar için, tek bir Go dosyasında實現された fluent API ile PDF fiş üretimi sağlayan paket.
 
-## Features
+## Özellikler
 
-- UTF-8 support with Turkish characters (ç, ğ, ı, ö, ş, ü, Ç, Ğ, İ, Ö, Ş, Ü)
-- Automatic text wrapping and row height calculation
-- Table layout with colspan and rowspan
-- Automatic page breaks for long receipts
-- QR code generation
-- Barcode generation (Code128, Code39)
-- Key-value pair formatting
-- Header and footer callbacks
+- **UTF-8 desteği** — Türkçe karakterler (ç, ğ, ı, ö, ş, ü) sorunsuz
+- **Dinamik sayfa yüksekliği** — içerik otomatik hesaplanır, kısa/uzun fişler için ayrı boyut gerekmez
+- **Basit API** — sadece 4 temel metod: `AddRow`, `AddLine`, `AddSpace`, `Save`
+- **Düşük bağımlılık** — sadece `gofpdf`
 
-## Installation
+## Kurulum
 
 ```bash
 go get github.com/MustafaCebeci/receipt
 ```
 
-## Quick Start
+## Hızlı Başlangıç
 
 ```go
-package main
+r := receipt.New(80) // 80mm kağıt genişliği
 
-import (
-    "github.com/MustafaCebeci/receipt"
+r.AddRow(receipt.NewCell("SWIFTY CAFE", receipt.TypeTitle, receipt.AlignCenter))
+r.AddRow(receipt.NewCell("Adana / Turkiye", receipt.TypeSmall, receipt.AlignCenter))
+r.AddLine()
+
+r.AddRow(
+    receipt.NewCell("Fis No", receipt.TypeNormal, receipt.AlignLeft),
+    receipt.NewCell("000154", receipt.TypeNormal, receipt.AlignRight),
 )
 
-func main() {
-    pdf := receipt.New("receipt.pdf")
+r.AddLine()
 
-    pdf.Title("SWIFTY CAFE")
-    pdf.Line()
+r.AddRow(
+    receipt.NewCell("URUN", receipt.TypeNormal, receipt.AlignLeft).WithBold().WithWidth(40),
+    receipt.NewCell("ADET", receipt.TypeNormal, receipt.AlignCenter).WithBold().WithWidth(15),
+    receipt.NewCell("FIYAT", receipt.TypeNormal, receipt.AlignRight).WithBold(),
+)
+r.AddLine()
 
-    pdf.Table(receipt.Columns(45, 8, 17))
-    pdf.Row(
-        receipt.Cell("Latte", receipt.Bold()),
-        receipt.Cell("2", receipt.Center()),
-        receipt.Cell(receipt.Money(90.00), receipt.Right()),
-    )
-    pdf.Row(
-        receipt.Cell("Cappuccino"),
-        receipt.Cell("1", receipt.Center()),
-        receipt.Cell(receipt.Money(45.00), receipt.Right()),
-    )
+r.AddRow(
+    receipt.NewCell("Latte", receipt.TypeNormal, receipt.AlignLeft).WithWidth(40),
+    receipt.NewCell("2", receipt.TypeNormal, receipt.AlignCenter).WithWidth(15),
+    receipt.NewCell(receipt.Money(270)+" TL", receipt.TypeNormal, receipt.AlignRight),
+)
 
-    pdf.Line()
-    pdf.KeyValue("TOPLAM", receipt.Money(135.00), receipt.Bold())
+r.AddLine()
 
-    pdf.QRCode("https://swiftycafe.com/order/12345")
-    pdf.Save()
-}
+r.AddRow(
+    receipt.NewCell("TOPLAM", receipt.TypeNormal, receipt.AlignLeft).WithBold(),
+    receipt.NewCell(receipt.Money(430)+" TL", receipt.TypeNormal, receipt.AlignRight).WithBold(),
+)
+
+r.Save("fis.pdf")
 ```
 
-## API Reference
+## API
 
-### Content Methods
+### Tipler
 
-| Method | Description |
-|--------|-------------|
-| `Title(text)` | Set receipt title (centered, bold) |
-| `SubTitle(text)` | Set receipt subtitle |
-| `Line()` | Draw solid horizontal line |
-| `DashedLine()` | Draw dashed horizontal line |
-| `Separator()` | Draw dashed line with space above/below |
-| `Space(mm)` | Add vertical space |
-| `Table(columns)` | Start a new table |
-| `Row(cells...)` | Add a row to the current table |
-| `KeyValue(key, value)` | Add a key-value line |
-| `QRCode(content)` | Add a QR code |
-| `Barcode(content, type)` | Add a barcode |
-| `Footer(fn)` | Set footer callback |
-| `Header(fn)` | Set header callback |
-| `Save()` | Save the PDF to file |
+| Tip | Açıklama |
+|-----|----------|
+| `CellType` | Hücre metin boyutu: `TypeTitle` (12pt), `TypeNormal` (9pt), `TypeSmall` (7pt) |
+| `Align` | Yatay hizalama: `AlignLeft`, `AlignCenter`, `AlignRight` |
 
-### Style Functions
+### Receipt Metodları
 
-| Function | Description |
-|----------|-------------|
-| `Bold()` | Bold text |
-| `Italic()` | Italic text |
-| `Underline()` | Underlined text |
-| `Size(n)` | Font size |
-| `Left()` | Left align |
-| `Center()` | Center align |
-| `Right()` | Right align |
-| `Top()` | Top align |
-| `Middle()` | Middle align |
-| `Bottom()` | Bottom align |
-| `Padding(n)` | Cell padding |
-| `Border()` | Enable all borders |
-| `ColSpan(n)` | Column span |
-| `RowSpan(n)` | Row span |
-| `Header()` | Header style (bold, 10pt) |
-| `Footer()` | Footer style (8pt) |
+| Metod | Açıklama |
+|-------|----------|
+| `New(widthMM)` | Verilen mm genişliğinde yeni fiş oluşturur |
+| `AddRow(cells...)` | Hücrelerle yeni bir satır ekler |
+| `AddLine()` | Yatay ayraç çizgisi ekler |
+| `AddSpace(mm)` | mm cinsinden dikey boşluk ekler |
+| `Save(filename)` | PDF'i diske yazar |
 
-### Helper Functions
+### Cell Metodları
 
-| Function | Description |
-|----------|-------------|
-| `Money(amount)` | Format as Turkish Lira (₺) |
-| `Date(time)` | Format date (DD.MM.YYYY) |
-| `DateTime(time)` | Format date and time |
-| `Percent(val)` | Format as percentage |
-| `Columns(widths...)` | Create table columns |
+| Metod | Açıklama |
+|-------|----------|
+| `WithBold()` | Kalın yazı tipi |
+| `WithItalic()` | İtalik yazı tipi |
+| `WithWidth(mm)` | Hücre genişliği (0 = otomatik) |
 
-## Paper Size
+### Yardımcı Fonksiyonlar
 
-This package is designed specifically for **80mm thermal receipt printers**. The paper width is fixed at 80mm.
+| Fonksiyon | Açıklama |
+|-----------|----------|
+| `Money(amount)` | `125.00` formatında döner |
+| `NewCell(text, type, align)` | Yeni hücre oluşturur |
 
-## License
+## Kağıt Boyutu
+
+80mm termal yazıcılar için tasarlanmıştır. Yükseklik dinamik olarak içerik miktarına göre hesaplanır.
+
+## Lisans
 
 MIT License
