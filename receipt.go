@@ -1,404 +1,348 @@
-// Package receipt provides a fluent API for generating 80mm thermal POS receipts.
-// It wraps gofpdf completely, hiding all third-party API from the developer.
+// Package receipt, 80mm termal yazıcılar için basit, siyah-beyaz,
+// tablo tabanlı PDF fiş üretimi sağlar. Tüm gofpdf detayları bu paket
+// içinde gizlenir; dışarıya sadece Receipt tipi ve metodları açılır.
 //
-// Example usage:
+// Akış:
 //
-//	pdf := receipt.New("receipt.pdf")
-//	pdf.Title("SWIFTY CAFE")
-//	pdf.Line()
-//	pdf.Table(receipt.Columns(50, 10, 20))
-//	pdf.Row(
-//	    receipt.Cell("Latte"),
-//	    receipt.Cell("2", receipt.Center()),
-//	    receipt.Cell(receipt.Money(270), receipt.Right()),
+//	r := receipt.New(80) // 80mm genişlik
+//	r.AddRow(
+//	    receipt.NewCell("URUN", receipt.TypeTitle, receipt.AlignLeft),
+//	    receipt.NewCell("AD", receipt.TypeTitle, receipt.AlignCenter),
+//	    receipt.NewCell("FIYAT", receipt.TypeTitle, receipt.AlignRight),
 //	)
-//	pdf.Line()
-//	pdf.KeyValue("Toplam", receipt.Money(270))
-//	pdf.QRCode("https://example.com")
-//	pdf.Save()
+//	r.AddLine()
+//	r.AddRow(
+//	    receipt.NewCell("Latte", receipt.TypeNormal, receipt.AlignLeft),
+//	    receipt.NewCell("2", receipt.TypeNormal, receipt.AlignCenter),
+//	    receipt.NewCell("270.00", receipt.TypeNormal, receipt.AlignRight),
+//	)
+//	r.Save("fis.pdf")
+//
+// Sayfa yüksekliği dinamiktir: içerik önce hafızada biriktirilir,
+// Save() çağrıldığında toplam yükseklik hesaplanıp PDF sayfası o
+// yüksekliğe göre oluşturulur. Bu yüzden çok kısa ya da çok uzun
+// fişler için ayrı ayrı sayfa boyutu ayarlamaya gerek kalmaz.
 package receipt
 
 import (
-	"bytes"
 	"fmt"
 
-	"github.com/phpdave11/gofpdf"
-	"github.com/skip2/go-qrcode"
+	"github.com/jung-kurt/gofpdf"
 )
 
-// Receipt is the main type for generating receipts.
-// It provides a fluent API for building receipt content.
+// ---------------------------------------------------------------------
+// Tipler: hücre içeriği (başlık / normal / küçük) ve hizalama
+// ---------------------------------------------------------------------
+
+// CellType, bir hücrenin metin boyutunu/rolünü belirler.
+type CellType int
+
+const (
+	// TypeTitle: büyük, kalın başlık metni (örn. "SWIFTY CAFE").
+	TypeTitle CellType = iota
+	// TypeNormal: standart gövde metni (ürün adı, fiyat vb.).
+	TypeNormal
+	// TypeSmall: dipnot / ek bilgi gibi küçük metin (adres, vergi no vb.).
+	TypeSmall
+)
+
+// Align, bir hücre içindeki metnin yatay hizalamasını belirler.
+type Align int
+
+const (
+	AlignLeft Align = iota
+	AlignCenter
+	AlignRight
+)
+
+// fontSize, her CellType için kullanılacak varsayılan punto değerini döner.
+func (t CellType) fontSize() float64 {
+	switch t {
+	case TypeTitle:
+		return 12
+	case TypeSmall:
+		return 7
+	default: // TypeNormal
+		return 9
+	}
+}
+
+// gofpdfAlignStr, Align değerini gofpdf'in beklediği hizalama koduna çevirir.
+func (a Align) gofpdfAlignStr() string {
+	switch a {
+	case AlignCenter:
+		return "C"
+	case AlignRight:
+		return "R"
+	default:
+		return "L"
+	}
+}
+
+// ---------------------------------------------------------------------
+// Cell: bir satırdaki tek bir hücre
+// ---------------------------------------------------------------------
+
+// Cell, bir satır içindeki tek bir hücreyi temsil eder.
+type Cell struct {
+	Text   string
+	Type   CellType
+	Align  Align
+	Bold   bool
+	Italic bool
+
+	// Width, hücrenin mm cinsinden genişliğidir. 0 verilirse, satırdaki
+	// genişliği belirtilmemiş diğer hücrelerle birlikte kalan alanı eşit
+	// paylaşır (otomatik genişlik).
+	Width float64
+}
+
+// NewCell, verilen metin/tip/hizalama ile sade bir hücre oluşturur.
+// Kalın/italik gibi ek stiller için WithBold / WithItalic / WithWidth
+// zincirleme metodlarını kullanabilirsiniz.
+func NewCell(text string, cellType CellType, align Align) *Cell {
+	return &Cell{
+		Text:  text,
+		Type:  cellType,
+		Align: align,
+	}
+}
+
+// WithBold, hücreyi kalın yazı tipiyle işaretler ve zincirlemeye izin verir.
+func (c *Cell) WithBold() *Cell {
+	c.Bold = true
+	return c
+}
+
+// WithItalic, hücreyi italik yazı tipiyle işaretler ve zincirlemeye izin verir.
+func (c *Cell) WithItalic() *Cell {
+	c.Italic = true
+	return c
+}
+
+// WithWidth, hücreye sabit bir mm genişliği atar (0 = otomatik).
+func (c *Cell) WithWidth(mm float64) *Cell {
+	c.Width = mm
+	return c
+}
+
+// fontStyle, gofpdf'in SetFont metoduna verilecek stil string'ini üretir.
+func (c *Cell) fontStyle() string {
+	style := ""
+	if c.Bold {
+		style += "B"
+	}
+	if c.Italic {
+		style += "I"
+	}
+	return style
+}
+
+// ---------------------------------------------------------------------
+// İç element modeli: Save() çağrılana kadar biriktirilen satırlar/çizgiler
+// ---------------------------------------------------------------------
+
+// elementKind, biriktirilen bir elementin türünü belirtir.
+type elementKind int
+
+const (
+	kindRow elementKind = iota
+	kindLine
+	kindSpace
+)
+
+// element, PDF'e çizilecek tek bir satır/çizgi/boşluk birimidir.
+type element struct {
+	kind  elementKind
+	cells []*Cell // kindRow için doludur
+	spaceMM float64 // kindSpace için doludur
+}
+
+// ---------------------------------------------------------------------
+// Receipt: dışarıya açılan ana sınıf
+// ---------------------------------------------------------------------
+
+// Receipt, biriktirilmiş fiş içeriğini tutar ve Save() çağrıldığında
+// gerçek PDF'i üretir.
 type Receipt struct {
-	filename    string
-	renderer    *renderer
-	doc         *Document
-	currentTable *Table
-	tableRows   []*row
-	headerFn    func(*Receipt)
-	footerFn    func(*Receipt)
-	closed      bool
+	widthMM     float64 // kağıt genişliği (örn. 80)
+	marginMM    float64 // sol/sağ/üst/alt kenar boşluğu
+	rowHeightMM float64 // her satırın (tek satırlık, kaydırmasız) yüksekliği
+
+	elements []element
 }
 
-// New creates a new Receipt for the specified filename.
-// The filename should have a .pdf extension.
-func New(filename string) *Receipt {
-	doc := NewDocument()
-
-	r, err := newRenderer(filename, doc)
-	if err != nil {
-		// If renderer creation fails, we still return a Receipt
-		// but Save() will fail with an appropriate error
-		return &Receipt{
-			filename: filename,
-			doc:      doc,
-		}
-	}
-
+// New, verilen kağıt genişliğinde (mm) yeni ve boş bir Receipt oluşturur.
+// Termal yazıcı senaryosu için genelde 80 kullanılır.
+func New(widthMM float64) *Receipt {
 	return &Receipt{
-		filename: filename,
-		renderer: r,
-		doc:      doc,
+		widthMM:     widthMM,
+		marginMM:    4,
+		rowHeightMM: 5,
+		elements:    make([]element, 0, 32),
 	}
 }
 
-// Paper80 is a constant for 80mm paper (kept for API compatibility).
-const Paper80 = 80.0
+// contentWidthMM, kenar boşlukları düşüldükten sonra kalan yazılabilir genişliktir.
+func (r *Receipt) contentWidthMM() float64 {
+	return r.widthMM - 2*r.marginMM
+}
 
-// Title sets the receipt title (centered, bold, large).
-func (r *Receipt) Title(text string) *Receipt {
-	if r.renderer == nil {
+// AddRow, verilen hücrelerle yeni bir satır ekler. Satırdaki hücre sayısı
+// tamamen bu çağrıda verilen cells parametresinin uzunluğuna göre belirlenir;
+// yani "kaç hücre olacağı" çağıran taraf tarafından dinamik olarak seçilir.
+func (r *Receipt) AddRow(cells ...*Cell) *Receipt {
+	if len(cells) == 0 {
+		// Hücresiz satır anlamsızdır; sessizce yok say.
 		return r
 	}
-	r.renderer.Title(text, 14)
+	r.elements = append(r.elements, element{kind: kindRow, cells: cells})
 	return r
 }
 
-// SubTitle sets the receipt subtitle (centered).
-func (r *Receipt) SubTitle(text string) *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.Subtitle(text, 12)
+// AddLine, o ana kadarki en son satırın altına yatay bir ayraç çizgisi ekler.
+func (r *Receipt) AddLine() *Receipt {
+	r.elements = append(r.elements, element{kind: kindLine})
 	return r
 }
 
-// Line draws a solid horizontal line.
-func (r *Receipt) Line() *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.Line(LineSolid)
+// AddSpace, mm cinsinden dikey boşluk ekler (satırlar arasını açmak için).
+func (r *Receipt) AddSpace(mm float64) *Receipt {
+	r.elements = append(r.elements, element{kind: kindSpace, spaceMM: mm})
 	return r
 }
 
-// DashedLine draws a dashed horizontal line.
-func (r *Receipt) DashedLine() *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.Line(LineDashed)
-	return r
-}
+// ---------------------------------------------------------------------
+// Yükseklik hesaplama (dinamik sayfa boyu için ön geçiş)
+// ---------------------------------------------------------------------
 
-// Separator draws a dashed line with space above and below.
-func (r *Receipt) Separator() *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.SpaceMM(2)
-	r.renderer.Line(LineDashed)
-	r.renderer.SpaceMM(2)
-	return r
-}
-
-// Space adds vertical space of the specified millimeters.
-func (r *Receipt) Space(mm float64) *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.SpaceMM(mm)
-	return r
-}
-
-// Table starts a new table with the specified columns.
-// Columns can be created with Columns(50, 10, 20) for fixed widths in mm.
-// Use 0 for auto-width columns.
-func (r *Receipt) Table(columns []Column) *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-
-	// If there's an existing table being built, finalize it first
-	if r.currentTable != nil {
-		r.finishTable()
-	}
-
-	// Calculate content width for auto columns
-	contentWidth := r.doc.Margins.ContentWidth()
-	for _, col := range columns {
-		if col.Width > 0 {
-			contentWidth -= col.Width
+// calculateTotalHeightMM, mevcut tüm elementlerin kaplayacağı toplam
+// dikey alanı (mm) hesaplar. PDF sayfası bu değere göre oluşturulur,
+// böylece sayfa uzunluğu içerik miktarına göre otomatik ayarlanmış olur.
+func (r *Receipt) calculateTotalHeightMM() float64 {
+	total := r.marginMM * 2 // üst + alt boşluk
+	for _, el := range r.elements {
+		switch el.kind {
+		case kindRow:
+			total += r.rowHeightMM
+		case kindLine:
+			total += r.rowHeightMM * 0.6
+		case kindSpace:
+			total += el.spaceMM
 		}
 	}
-
-	// Create new table
-	r.currentTable = TableNew(columns)
-
-	// Calculate column widths
-	r.currentTable.CalculateColumnWidths(contentWidth)
-
-	return r
+	return total
 }
 
-// Row adds a row to the current table.
-// Must be called after Table().
-func (r *Receipt) Row(cells ...*cell) *Receipt {
-	if r.renderer == nil {
-		return r
+// ---------------------------------------------------------------------
+// Render / Save
+// ---------------------------------------------------------------------
+
+// Save, biriktirilmiş tüm içeriği gerçek bir PDF dosyasına çizer ve diske yazar.
+func (r *Receipt) Save(filename string) error {
+	heightMM := r.calculateTotalHeightMM()
+	// Çok kısa fişlerde bile makul bir minimum sayfa uzunluğu bırakalım.
+	if heightMM < 40 {
+		heightMM = 40
 	}
 
-	if r.currentTable == nil {
-		// Create a default table if none exists
-		colWidths := make([]float64, len(cells))
-		contentWidth := r.doc.Margins.ContentWidth()
-		colWidth := contentWidth / float64(len(cells))
-		for i := range cells {
-			colWidths[i] = colWidth
-		}
-		r.currentTable = TableNew(Columns(colWidths...))
-		r.currentTable.CalculateColumnWidths(contentWidth)
-	}
-
-	row := &row{Cells: cells}
-	r.currentTable.AddRow(row)
-
-	return r
-}
-
-// finishTable finalizes the current table and renders it.
-func (r *Receipt) finishTable() {
-	if r.currentTable == nil || r.renderer == nil {
-		return
-	}
-
-	// Render the table
-	x := r.renderer.GetX()
-	y := r.renderer.GetY()
-
-	// Get column widths in points
-	colWidths := r.currentTable.GetColumnWidths()
-
-	// Calculate total table width
-	totalWidth := 0.0
-	for _, w := range colWidths {
-		totalWidth += w
-	}
-
-	// Center the table
-	x = r.renderer.GetX() + (mmToPoint(r.doc.Margins.ContentWidth())-totalWidth)/2
-
-	r.currentTable.Render(r.renderer.GetPDF(), x, y)
-
-	// Clear current table
-	r.currentTable = nil
-}
-
-// KeyValue adds a key-value line.
-// The key is left-aligned, the value is right-aligned.
-func (r *Receipt) KeyValue(key interface{}, value interface{}, styles ...Style) *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-
-	// Finalize any pending table
-	if r.currentTable != nil {
-		r.finishTable()
-	}
-
-	ctx := DefaultStyleContext()
-	Apply(ctx, styles...)
-
-	keyStr := toString(key)
-	valueStr := toString(value)
-
-	r.renderer.KeyValue(keyStr, valueStr, ctx)
-	return r
-}
-
-// QRCode adds a QR code to the receipt.
-// The QR code is centered and sized appropriately.
-func (r *Receipt) QRCode(content string) *Receipt {
-	if r.renderer == nil || content == "" {
-		return r
-	}
-
-	// Calculate size
-	size := QRCodeSize(content)
-
-	// Generate QR code
-	qr, err := qrcode.Encode(content, qrcode.Medium, int(size*3))
-	if err != nil {
-		return r
-	}
-
-	// Get PDF reference
-	pdf := r.renderer.GetPDF()
+	pdf := gofpdf.NewCustom(&gofpdf.InitType{
+		UnitStr: "mm",
+		Size: gofpdf.SizeType{
+			Wd: r.widthMM,
+			Ht: heightMM,
+		},
+	})
+	pdf.SetMargins(r.marginMM, r.marginMM, r.marginMM)
+	pdf.SetAutoPageBreak(false, 0) // fişin tamamı tek, dinamik boyutlu sayfaya sığar
+	pdf.AddUTF8Font("DejaVuSans", "", "assets/fonts/DejaVuSans.ttf")
+	pdf.AddUTF8Font("DejaVuSans", "B", "assets/fonts/DejaVuSans-Bold.ttf")
+	pdf.AddUTF8Font("DejaVuSans", "I", "assets/fonts/DejaVuSans-Oblique.ttf")
+	pdf.AddUTF8Font("DejaVuSans", "BI", "assets/fonts/DejaVuSans-BoldOblique.ttf")
 	pdf.AddPage()
 
-	// Get page width for centering
-	pageWidth, _ := pdf.GetPageSize()
-
-	// Create a unique image name
-	imgName := "qrcode_" + content[:min(10, len(content))]
-
-	// Register image
-	info := pdf.RegisterImageOptionsReader(imgName, gofpdf.ImageOptions{ImageType: "PNG"}, bytes.NewReader(qr))
-	if info == nil {
-		return r
+	for _, el := range r.elements {
+		switch el.kind {
+		case kindRow:
+			r.drawRow(pdf, el.cells)
+		case kindLine:
+			r.drawLine(pdf)
+		case kindSpace:
+			pdf.SetY(pdf.GetY() + el.spaceMM)
+		}
 	}
 
-	// Calculate dimensions to fit on page
-	imgWidth := info.Width()
-	imgHeight := info.Height()
-
-	// Scale to fit page width with margins
-	maxWidth := pageWidth - mmToPoint(20) // 10mm margin each side
-	if imgWidth > maxWidth {
-		scale := maxWidth / imgWidth
-		imgWidth *= scale
-		imgHeight *= scale
-	}
-
-	// Center horizontally
-	x := (pageWidth - imgWidth) / 2
-	y := r.renderer.GetY()
-
-	// Draw image
-	pdf.Image(imgName, x, y, imgWidth, imgHeight, false, "PNG", 0, "")
-
-	// Update Y position
-	r.renderer.SetY(y + imgHeight + 5)
-
-	return r
+	return pdf.OutputFileAndClose(filename)
 }
 
-// Barcode adds a barcode to the receipt.
-func (r *Receipt) Barcode(content string, barcodeType BarcodeType) *Receipt {
-	if r.renderer == nil || content == "" {
-		return r
+// drawRow, tek bir satırı (bir veya daha fazla hücreyi) çizer ve
+// imleci (cursor) bir sonraki satıra ilerletir.
+func (r *Receipt) drawRow(pdf *gofpdf.Fpdf, cells []*Cell) {
+	contentWidth := r.contentWidthMM()
+
+	// Sabit genişliği belirtilmiş hücrelerin toplamını çıkar,
+	// kalanı otomatik genişlikli hücreler arasında eşit paylaştır.
+	fixedWidth := 0.0
+	autoCount := 0
+	for _, c := range cells {
+		if c.Width > 0 {
+			fixedWidth += c.Width
+		} else {
+			autoCount++
+		}
+	}
+	remaining := contentWidth - fixedWidth
+	if remaining < 0 {
+		remaining = 0
+	}
+	autoWidth := 0.0
+	if autoCount > 0 {
+		autoWidth = remaining / float64(autoCount)
 	}
 
-	// Finalize any pending table
-	if r.currentTable != nil {
-		r.finishTable()
+	y := pdf.GetY()
+	x := r.marginMM
+	pdf.SetXY(x, y)
+
+	for _, c := range cells {
+		w := c.Width
+		if w <= 0 {
+			w = autoWidth
+		}
+
+		style := c.fontStyle()
+		if c.Type == TypeTitle && !c.Bold {
+			style += "B"
+		}
+		pdf.SetFont("DejaVuSans", style, c.Type.fontSize())
+
+		pdf.CellFormat(w, r.rowHeightMM, c.Text, "", 0, c.Align.gofpdfAlignStr(), false, 0, "")
 	}
 
-	pdf := r.renderer.GetPDF()
-	x := r.renderer.GetX()
-	y := r.renderer.GetY()
-
-	width := mmToPoint(r.doc.Margins.ContentWidth() * 0.8)
-	height := mmToPoint(15)
-
-	err := Barcode(pdf, content, barcodeType, x, y, width, height)
-	if err != nil {
-		return r
-	}
-
-	r.renderer.SetY(y + height + 5)
-	return r
+	// İmleci bir sonraki satıra indir (satır başına dön + aşağı in).
+	pdf.SetXY(r.marginMM, y+r.rowHeightMM)
 }
 
-// Footer sets a footer callback that is called on each page.
-func (r *Receipt) Footer(fn func(*Receipt)) *Receipt {
-	r.footerFn = fn
-	if r.renderer != nil {
-		r.renderer.SetFooter(func(p *gofpdf.Fpdf) {
-			if r.footerFn != nil {
-				// Create a minimal receipt for footer context
-				r.footerFn(r)
-			}
-		})
-	}
-	return r
+// drawLine, geçerli Y konumuna kesikli-olmayan düz bir ayraç çizgisi çizer
+// ve imleci çizginin altına ilerletir.
+func (r *Receipt) drawLine(pdf *gofpdf.Fpdf) {
+	y := pdf.GetY()
+	x1 := r.marginMM
+	x2 := r.widthMM - r.marginMM
+
+	pdf.SetLineWidth(0.2)
+	pdf.Line(x1, y, x2, y)
+
+	pdf.SetXY(r.marginMM, y+r.rowHeightMM*0.6)
 }
 
-// Header sets a header callback that is called on each page.
-func (r *Receipt) Header(fn func(*Receipt)) *Receipt {
-	r.headerFn = fn
-	if r.renderer != nil {
-		r.renderer.SetHeader(func(p *gofpdf.Fpdf) {
-			if r.headerFn != nil {
-				r.headerFn(r)
-			}
-		})
-	}
-	return r
-}
+// ---------------------------------------------------------------------
+// Küçük yardımcı: para/etiket gibi tek satırlık kısayollar isteyen
+// kullanıcılar için opsiyonel bir yardımcı fonksiyon.
+// ---------------------------------------------------------------------
 
-// Save saves the receipt to the file.
-// This should be called after all content has been added.
-func (r *Receipt) Save() error {
-	if r.renderer == nil {
-		return ErrSaveFailed
-	}
-
-	// Finalize any pending table
-	if r.currentTable != nil {
-		r.finishTable()
-	}
-
-	return r.renderer.Save(r.filename)
-}
-
-// GetPDF returns the underlying gofpdf instance (for advanced use cases).
-// This should rarely be needed.
-func (r *Receipt) GetPDF() *gofpdf.Fpdf {
-	if r.renderer == nil {
-		return nil
-	}
-	return r.renderer.GetPDF()
-}
-
-// SetFont sets the default font family.
-func (r *Receipt) SetFont(family string, size float64) *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.SetFont(family, "", size)
-	return r
-}
-
-// GetY returns the current Y position.
-func (r *Receipt) GetY() float64 {
-	if r.renderer == nil {
-		return 0
-	}
-	return r.renderer.GetY()
-}
-
-// SetY sets the Y position.
-func (r *Receipt) SetY(y float64) *Receipt {
-	if r.renderer == nil {
-		return r
-	}
-	r.renderer.SetY(y)
-	return r
-}
-
-// toString converts an interface{} to string.
-func toString(v interface{}) string {
-	if v == nil {
-		return ""
-	}
-	switch s := v.(type) {
-	case string:
-		return s
-	case fmt.Stringer:
-		return s.String()
-	case error:
-		return s.Error()
-	default:
-		return fmt.Sprintf("%v", s)
-	}
+// Money, bir sayıyı "125.00" formatında (para birimi eki olmadan) döner.
+// Kullanıcı isterse kendi para birimi ekini (örn. " TL") string'e ekleyebilir.
+func Money(amount float64) string {
+	return fmt.Sprintf("%.2f", amount)
 }
