@@ -4,7 +4,7 @@
 //
 // Akış:
 //
-//	r := receipt.New(80) // 80mm genişlik
+//	r := receipt.New(receipt.DefaultWidth) // 72mm (80mm yazıcıların çoğunda baskı alanı)
 //	r.AddRow(
 //	    receipt.NewCell("URUN", receipt.TypeTitle, receipt.AlignLeft),
 //	    receipt.NewCell("AD", receipt.TypeTitle, receipt.AlignCenter),
@@ -165,15 +165,20 @@ type element struct {
 // Receipt, biriktirilmiş fiş içeriğini tutar ve Save() çağrıldığında
 // gerçek PDF'i üretir.
 type Receipt struct {
-	widthMM     float64 // kağıt genişliği (örn. 80)
+	widthMM     float64 // kağıt genişliği (örn. 72)
 	marginMM    float64 // sol/sağ/üst/alt kenar boşluğu
 	rowHeightMM float64 // her satırın (tek satırlık, kaydırmasız) yüksekliği
 
 	elements []element
 }
 
+// DefaultWidth, 80mm termal yazıcıların çoğu için standart baskı alanı genişliğidir.
+// Yazıcının gerçek baskı alanı 72-72.1mm olduğundan, PDF genişliği buna ayarlanmalıdır.
+// Bu sayede Chrome/Windows ölçekleme yapmaz ve içerik doğru hizalanır.
+const DefaultWidth = 72.0
+
 // New, verilen kağıt genişliğinde (mm) yeni ve boş bir Receipt oluşturur.
-// Termal yazıcı senaryosu için genelde 80 kullanılır.
+// Çoğu 80mm termal yazıcı için receipt.DefaultWidth (72mm) kullanılabilir.
 func New(widthMM float64) *Receipt {
 	return &Receipt{
 		widthMM:     widthMM,

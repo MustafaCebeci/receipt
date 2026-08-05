@@ -18,7 +18,7 @@ go get github.com/MustafaCebeci/receipt
 ## Hızlı Başlangıç
 
 ```go
-r := receipt.New(80) // 80mm kağıt genişliği
+r := receipt.New(receipt.DefaultWidth) // 72mm (80mm yazıcıların standart baskı alanı)
 
 r.AddRow(receipt.NewCell("SWIFTY CAFE", receipt.TypeTitle, receipt.AlignCenter))
 r.AddRow(receipt.NewCell("Adana / Turkiye", receipt.TypeSmall, receipt.AlignCenter))
@@ -67,7 +67,7 @@ r.Save("fis.pdf")
 
 | Metod | Açıklama |
 |-------|----------|
-| `New(widthMM)` | Verilen mm genişliğinde yeni fiş oluşturur |
+| `New(widthMM)` | Verilen mm genişliğinde yeni fiş oluşturur. Çoğu 80mm yazıcı için `DefaultWidth` (72mm) önerilir |
 | `AddRow(cells...)` | Hücrelerle yeni bir satır ekler |
 | `AddLine()` | Yatay ayraç çizgisi ekler |
 | `AddSpace(mm)` | mm cinsinden dikey boşluk ekler |
@@ -91,6 +91,20 @@ r.Save("fis.pdf")
 ## Kağıt Boyutu
 
 80mm termal yazıcılar için tasarlanmıştır. Yükseklik dinamik olarak içerik miktarına göre hesaplanır.
+
+**Önemli:** 80mm yazıcıların çoğu kağıt genişliği 80mm olsa da, gerçek baskı alanı ~72mm'dir. Bu yüzden `DefaultWidth` (72mm) kullanmanız önerilir. Bu sayede PDF ölçekleme yapılmadan doğrudan yazdırılır.
+
+## Font Bağımlılığı
+
+Paket, DejaVu Sans TrueType fontlarını kullanır ve font dosyaları `assets/fonts/` klasöründe bulunur. Paketi kullanan projelerde bu klasörün korunması gerekir.
+
+```bash
+# Projeyi klonladığınızda fontlar otomatik gelir
+git clone https://github.com/MustafaCebeci/receipt.git
+cd receipt
+```
+
+Fontlar `go get` ile çekildiğinde otomatik olarak gelir. Ancak projeyi başka bir konumdan çalıştırıyorsanız, `assets/fonts/` klasörünün çalışma dizininde bulunduğundan emin olun.
 
 ## Lisans
 
