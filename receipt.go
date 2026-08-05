@@ -172,17 +172,21 @@ type Receipt struct {
 	elements []element
 }
 
-// DefaultWidth, 80mm termal yazıcıların çoğu için standart baskı alanı genişliğidir.
-// Yazıcının gerçek baskı alanı 72-72.1mm olduğundan, PDF genişliği buna ayarlanmalıdır.
-// Bu sayede Chrome/Windows ölçekleme yapmaz ve içerik doğru hizalanır.
-const DefaultWidth = 72.0
+// DefaultWidth, Sunlux RP8020 ve benzeri 80mm termal yazıcılar için
+// standart printable area genişliğidir (72.1mm = 576 dots @ 203 DPI).
+const DefaultWidth = 72.1
+
+// DefaultMargin, her kenardan 2mm kenar boşluğu bırakır.
+// İçerik genişliği: 72.1 - 4 = 68.1mm olur.
+const DefaultMargin = 2.0
 
 // New, verilen kağıt genişliğinde (mm) yeni ve boş bir Receipt oluşturur.
-// Çoğu 80mm termal yazıcı için receipt.DefaultWidth (72mm) kullanılabilir.
+// Çoğu 80mm termal yazıcı için receipt.DefaultWidth (72.1mm) kullanılabilir.
+// Margin'i değiştirmek için SetMargin() metodunu zincirleme olarak kullanabilirsiniz.
 func New(widthMM float64) *Receipt {
 	return &Receipt{
 		widthMM:     widthMM,
-		marginMM:    4,
+		marginMM:    DefaultMargin,
 		rowHeightMM: 5,
 		elements:    make([]element, 0, 32),
 	}
@@ -214,6 +218,13 @@ func (r *Receipt) AddLine() *Receipt {
 // AddSpace, mm cinsinden dikey boşluk ekler (satırlar arasını açmak için).
 func (r *Receipt) AddSpace(mm float64) *Receipt {
 	r.elements = append(r.elements, element{kind: kindSpace, spaceMM: mm})
+	return r
+}
+
+// SetMargin, kenar boşluğunu mm cinsinden ayarlar ve zincirlemeye izin verir.
+// Varsayılan margin DefaultMargin (2mm) ile başlar.
+func (r *Receipt) SetMargin(mm float64) *Receipt {
+	r.marginMM = mm
 	return r
 }
 
@@ -252,7 +263,8 @@ func (r *Receipt) Save(filename string) error {
 	}
 
 	pdf := gofpdf.NewCustom(&gofpdf.InitType{
-		UnitStr: "mm",
+		UnitStr:       "mm",
+		OrientationStr: "P", // Portrait - açıkça belirt
 		Size: gofpdf.SizeType{
 			Wd: r.widthMM,
 			Ht: heightMM,

@@ -18,7 +18,7 @@ go get github.com/MustafaCebeci/receipt
 ## Hızlı Başlangıç
 
 ```go
-r := receipt.New(receipt.DefaultWidth) // 72mm (80mm yazıcıların standart baskı alanı)
+r := receipt.New(receipt.DefaultWidth) // 72.1mm (576 dots @ 203 DPI printable area)
 
 r.AddRow(receipt.NewCell("SWIFTY CAFE", receipt.TypeTitle, receipt.AlignCenter))
 r.AddRow(receipt.NewCell("Adana / Turkiye", receipt.TypeSmall, receipt.AlignCenter))
@@ -67,7 +67,8 @@ r.Save("fis.pdf")
 
 | Metod | Açıklama |
 |-------|----------|
-| `New(widthMM)` | Verilen mm genişliğinde yeni fiş oluşturur. Çoğu 80mm yazıcı için `DefaultWidth` (72mm) önerilir |
+| `New(widthMM)` | Verilen mm genişliğinde yeni fiş oluşturur. Çoğu 80mm yazıcı için `DefaultWidth` (72.1mm) önerilir |
+| `SetMargin(mm)` | Kenar boşluğunu ayarlar (varsayılan: 2mm) |
 | `AddRow(cells...)` | Hücrelerle yeni bir satır ekler |
 | `AddLine()` | Yatay ayraç çizgisi ekler |
 | `AddSpace(mm)` | mm cinsinden dikey boşluk ekler |
@@ -92,7 +93,14 @@ r.Save("fis.pdf")
 
 80mm termal yazıcılar için tasarlanmıştır. Yükseklik dinamik olarak içerik miktarına göre hesaplanır.
 
-**Önemli:** 80mm yazıcıların çoğu kağıt genişliği 80mm olsa da, gerçek baskı alanı ~72mm'dir. Bu yüzden `DefaultWidth` (72mm) kullanmanız önerilir. Bu sayede PDF ölçekleme yapılmadan doğrudan yazdırılır.
+### Sabitler
+
+| Sabit | Değer | Açıklama |
+|-------|-------|----------|
+| `DefaultWidth` | 72.1mm | Sunlux RP8020 ve benzeri yazıcılar için printable area (576 dots @ 203 DPI) |
+| `DefaultMargin` | 2.0mm | Her kenardan varsayılan boşluk (toplam 4mm) |
+
+**Önemli:** 80mm yazıcıların kağıt genişliği 80mm olsa da, gerçek baskı alanı 72.1mm'dir. `DefaultWidth` (72.1mm) kullanmanız önerilir. PDF her zaman portrait orientation'da oluşturulur.
 
 ## Font Bağımlılığı
 
