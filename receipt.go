@@ -257,9 +257,10 @@ func (r *Receipt) calculateTotalHeightMM() float64 {
 // Save, biriktirilmiş tüm içeriği gerçek bir PDF dosyasına çizer ve diske yazar.
 func (r *Receipt) Save(filename string) error {
 	heightMM := r.calculateTotalHeightMM()
-	// Çok kısa fişlerde bile makul bir minimum sayfa uzunluğu bırakalım.
-	if heightMM < 40 {
-		heightMM = 40
+	// Minimum yükseklik, genişlikten mutlaka büyük olmalı (portrait için).
+	// Yoksa 72.1mm genişlik, 40mm yükseklik ile landscape olur.
+	if heightMM < r.widthMM {
+		heightMM = r.widthMM + 1
 	}
 
 	pdf := gofpdf.NewCustom(&gofpdf.InitType{
